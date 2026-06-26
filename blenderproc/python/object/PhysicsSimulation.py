@@ -229,85 +229,87 @@ class _PhysicsSimulation:
         return float(frames) / bpy.context.scene.render.fps
 
     @staticmethod
-    def do_simulation(min_simulation_time: float, max_simulation_time: float, check_object_interval: float,
-                      object_stopped_location_threshold: float, object_stopped_rotation_threshold: float,
-                      verbose: bool = False):
-        """ Perform the simulation.
+    def do_simulation(min_simulation_time, max_simulation_time, check_object_interval,
+                      object_stopped_location_threshold, object_stopped_rotation_threshold,
+                      verbose=False):
+        """ Runs the rigid body simulation by stepping through frames sequentially.
 
-        This method bakes the simulation for the configured number of iterations and returns all object positions
-        at the last frame.
+        Frames are stepped one by one from 1 to ensure Bullet's internal state is
+        consistent. Checking for early exit begins after min_simulation_time seconds
+        and is performed every check_object_interval seconds thereafter.
 
-        :param min_simulation_time: The minimum number of seconds to simulate.
+        :param min_simulation_time: The minimum number of seconds to simulate before
+                                    checking whether objects have stopped moving.
         :param max_simulation_time: The maximum number of seconds to simulate.
-        :param check_object_interval: The interval in seconds at which all objects should be checked if they are still
-                                      moving. If all objects have stopped moving, then the simulation will be stopped.
-        :param object_stopped_location_threshold: The maximum difference per second and per coordinate in the rotation
-                                                  Euler vector that is allowed such that an object is still recognized
-                                                  as 'stopped moving'.
-        :param object_stopped_rotation_threshold: The maximum difference per second and per coordinate in the rotation
-                                                  Euler vector that is allowed such that an object is still recognized
-                                                  as 'stopped moving'.
-        :param verbose: If True, more details during the physics simulation are printed.
+        :param check_object_interval: The interval in seconds at which all active objects
+                                      are checked for movement. If all have stopped, the
+                                      simulation is terminated early.
+        :param object_stopped_location_threshold: The maximum change in location per
+                                                  coordinate allowed for an object to be
+                                                  considered stopped.
+        :param object_stopped_rotation_threshold: The maximum change in rotation (radians)
+                                                  allowed for an object to be considered
+                                                  stopped.
+        :param verbose: If True, prints a message when the simulation stops early.
         """
-        # Make sure the RigidBody world is active
-        bpy.context.scene.rigidbody_world.enabled = True
+        scene = bpy.context.scene
 
-        # Run simulation
-        point_cache = bpy.context.scene.rigidbody_world.point_cache
-        point_cache.frame_start = 1
+        start_frame = _PhysicsSimulation.seconds_to_frames(min_simulation_time)
+        end_frame = _PhysicsSimulation.seconds_to_frames(max_simulation_time)
+        check_step = max(1, _PhysicsSimulation.seconds_to_frames(check_object_interval))
 
-        if min_simulation_time >= max_simulation_time:
-            raise Exception("max_simulation_iterations has to be bigger than min_simulation_iterations")
+        # ── CRITICAL: step from frame 1 sequentially, never skip ──
+        frame = 0
+        scene.frame_set(frame)
+        old_poses = None
 
-        # Run simulation starting from min to max in the configured steps
-        for current_time in np.arange(min_simulation_time, max_simulation_time, check_object_interval):
-            current_frame = _PhysicsSimulation.seconds_to_frames(current_time)
-            print("Running simulation up to " + str(current_time) + " seconds (" + str(current_frame) + " frames)")
+        for frame in range(1, end_frame + 1):
+            scene.frame_set(frame)
 
-            # Simulate current interval
-            point_cache.frame_end = current_frame
-            with stdout_redirected(enabled=not verbose):
-                with bpy.context.temp_override(point_cache=point_cache):
-                    bpy.ops.ptcache.bake(bake=True)
+            # only start checking after min_simulation_time
+            if frame < start_frame:
+                continue
 
-            # Go to second last frame and get poses
-            bpy.context.scene.frame_set(current_frame - _PhysicsSimulation.seconds_to_frames(1))
-            old_poses = _PhysicsSimulation.get_pose()
+            # check stopping condition every check_step frames
+            if (frame - start_frame) % check_step == 0:
+                new_poses = _PhysicsSimulation.get_pose()
 
-            # Go to last frame of simulation and get poses
-            bpy.context.scene.frame_set(current_frame)
-            new_poses = _PhysicsSimulation.get_pose()
+                if old_poses is not None:
+                    if _PhysicsSimulation.have_objects_stopped_moving(
+                            old_poses, new_poses,
+                            object_stopped_location_threshold,
+                            object_stopped_rotation_threshold
+                    ):
+                        if verbose:
+                            print(f"[SIM] Stopped early at frame {frame}")
+                        break
 
-            # If objects have stopped moving between the last two frames, then stop here
-            if _PhysicsSimulation.have_objects_stopped_moving(old_poses, new_poses, object_stopped_location_threshold,
-                                                              object_stopped_rotation_threshold):
-                print("Objects have stopped moving after " + str(current_time) + "  seconds (" + str(
-                    current_frame) + " frames)")
-                break
-            if current_time + check_object_interval >= max_simulation_time:
-                print("Stopping simulation as configured max_simulation_time has been reached")
-            else:
-                # Free bake (this will not completely remove the simulation cache, so further simulations can
-                # reuse the already calculated frames)
-                with bpy.context.temp_override(point_cache=point_cache):
-                    bpy.ops.ptcache.free_bake()
+                old_poses = new_poses
+
+        scene.frame_set(frame)
 
     @staticmethod
-    def get_pose() -> dict:
-        """ Returns position and rotation values of all objects in the scene with ACTIVE rigid_body type.
+    def get_pose():
+        """ Returns the current world-space pose of all active rigid body objects.
 
-        :return: Dict of form {obj_name:{'location':[x, y, z], 'rotation':[x_rot, y_rot, z_rot]}}.
+        :return: A dict of the form {obj_name: {'location': Vector, 'rotation': Euler}}
+                 for every object with an active rigid body component.
         """
-        objects_poses = {}
-        objects_with_physics = [obj for obj in get_all_blender_mesh_objects() if obj.rigid_body is not None]
+        poses = {}
 
-        for obj in objects_with_physics:
-            if obj.rigid_body.type == 'ACTIVE':
-                location = bpy.context.scene.objects[obj.name].matrix_world.translation.copy()
-                rotation = mathutils.Vector(bpy.context.scene.objects[obj.name].matrix_world.to_euler())
-                objects_poses.update({obj.name: {'location': location, 'rotation': rotation}})
+        for obj in bpy.data.objects:
+            rb = obj.rigid_body
+            if rb is None or rb.type != 'ACTIVE':
+                continue
 
-        return objects_poses
+            mw = obj.matrix_world
+
+            poses[obj.name] = {
+                "location": mw.translation.copy(),
+                "rotation": mw.to_euler()
+            }
+
+        return poses
 
     @staticmethod
     def have_objects_stopped_moving(last_poses: dict, new_poses: dict, object_stopped_location_threshold: float,
@@ -326,13 +328,17 @@ class _PhysicsSimulation:
         """
         stopped = True
         for obj_name in last_poses:
-            # Check location difference
-            location_diff = last_poses[obj_name]['location'] - new_poses[obj_name]['location']
-            stopped = stopped and not any(location_diff[i] > object_stopped_location_threshold for i in range(3))
+            loc_change = (last_poses[obj_name]['location'] - new_poses[obj_name]['location']).length
 
-            # Check rotation difference
-            rotation_diff = last_poses[obj_name]['rotation'] - new_poses[obj_name]['rotation']
-            stopped = stopped and not any(rotation_diff[i] > object_stopped_rotation_threshold for i in range(3))
+            rot1 = last_poses[obj_name]["rotation"].to_quaternion()
+            rot2 = new_poses[obj_name]["rotation"].to_quaternion()
+
+            rot_change = rot1.rotation_difference(rot2).angle
+
+            stopped = (
+                    loc_change < object_stopped_location_threshold and
+                    rot_change < object_stopped_rotation_threshold
+            )
 
             if not stopped:
                 break
