@@ -21,7 +21,9 @@ from blenderproc.python.camera import CameraUtility
 from blenderproc.python.utility.MathUtility import change_source_coordinate_frame_of_transformation_matrix
 
 
-def set_lens_distortion(k1: float, k2: float, k3: float = 0.0, p1: float = 0.0, p2: float = 0.0,
+def set_lens_distortion(k1: float, k2: float, k3: float = 0.0,
+                        p1: float = 0.0, p2: float = 0.0,
+                        rx: float = 0.0, ry: float = 0.0,
                         use_global_storage: bool = False) -> np.ndarray:
     """
     This function applies the lens distortion parameters to obtain an distorted-to-undistorted mapping for all
@@ -64,10 +66,14 @@ def set_lens_distortion(k1: float, k2: float, k3: float = 0.0, p1: float = 0.0, 
             cameras do not need them or their potential accuracy gain is negligible w.r.t. image processing.
     :use_global_storage: Whether to save the mapping coordinates and original image resolution in a global
                          storage (backward compat for configs)
+    :param rx: Sensor tilt around x-axis.
+    :param ry: Sensor tilt around y-axis.
+    :param use_global_storage: Store distortion map in global storage.
     :return: mapping coordinates from distorted to undistorted image pixels
     """
-    if all(v == 0.0 for v in [k1, k2, k3, p1, p2]):
-        raise Exception("All given lens distortion parameters (k1, k2, k3, p1, p2) are zero.")
+
+    if all(v == 0.0 for v in [k1, k2, k3, p1, p2, rx, ry]):
+        raise Exception("All given lens distortion parameters (k1, k2, k3, p1, p2, rx, ry) are zero.")
 
     # save the original image resolution (desired output resolution)
     original_image_resolution = (bpy.context.scene.render.resolution_y, bpy.context.scene.render.resolution_x)
@@ -76,6 +82,27 @@ def set_lens_distortion(k1: float, k2: float, k3: float = 0.0, p1: float = 0.0, 
     camera_K_matrix = CameraUtility.get_intrinsics_as_K_matrix()
     fx, fy = camera_K_matrix[0][0], camera_K_matrix[1][1]
     cx, cy = camera_K_matrix[0][2], camera_K_matrix[1][2]
+
+    # Compute rotation matrix for applying sensor-tilt
+    cos_rx, sin_rx = np.cos(rx), np.sin(rx)
+    cos_ry, sin_ry = np.cos(ry), np.sin(ry)
+    Rx_mat = np.array([
+        [1, 0, 0],
+        [0, cos_rx, sin_rx],
+        [0, -sin_rx, cos_rx]
+    ])
+    Ry_mat = np.array([
+        [cos_ry, 0, -sin_ry],
+        [0, 1, 0],
+        [sin_ry, 0, cos_ry]
+    ])
+    R_xy = Ry_mat @ Rx_mat
+    proj = np.array([
+        [R_xy[2, 2], 0, -R_xy[0, 2]],
+        [0, R_xy[2, 2], -R_xy[1, 2]],
+        [0, 0, 1]
+    ])
+    S_xy = proj @ R_xy
 
     # Get row,column image coordinates for all pixels for row-wise image flattening
     # The center of the upper-left pixel has coordinates [0,0] both in DLR CalDe and python/scipy
@@ -117,6 +144,13 @@ def set_lens_distortion(k1: float, k2: float, k3: float = 0.0, p1: float = 0.0, 
         radial_part = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
         x_ = x * radial_part + 2 * p2 * x * y + p1 * (r2 + 2 * np.square(x))
         y_ = y * radial_part + 2 * p1 * x * y + p2 * (r2 + 2 * np.square(y))
+
+        # Add sensor tilt
+        pts = np.vstack([x_, y_, np.ones_like(x_)])
+        pts_tilted = S_xy @ pts
+
+        x_ = pts_tilted[0] / pts_tilted[2]
+        y_ = pts_tilted[1] / pts_tilted[2]
 
         error = np.max(np.hypot(fx * (x_ - P_und[0, :]), fy * (y_ - P_und[1, :])))
         res.append(error)
