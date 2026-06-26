@@ -152,7 +152,8 @@ def simulate_physics_and_persist_all_frames(min_simulation_time: float = 4.0, ma
 def simulate_physics(min_simulation_time: float = 4.0, max_simulation_time: float = 40.0,
                      check_object_interval: float = 2.0, object_stopped_location_threshold: float = 0.01,
                      object_stopped_rotation_threshold: float = 0.1, substeps_per_frame: int = 10,
-                     solver_iters: int = 10, verbose: bool = False, use_volume_com: bool = False) -> dict:
+                     solver_iters: int = 10, verbose: bool = False, use_model_origins: bool = True,
+                     use_volume_com: bool = False) -> dict:
     """ Simulates the current scene.
 
     The simulation is run for at least `min_simulation_time` seconds and at a maximum `max_simulation_time` seconds.
@@ -176,20 +177,24 @@ def simulate_physics(min_simulation_time: float = 4.0, max_simulation_time: floa
     :param substeps_per_frame: Number of simulation steps taken per frame.
     :param solver_iters: Number of constraint solver iterations made per simulation step.
     :param verbose: If True, more details during the physics simulation are printed.
+    :param use_model_origins: If True (default), the models origin will be used as they are. It is expected that
+                              the models origin is already the center of mass of the object.
     :param use_volume_com: If True, the center of mass will be calculated by using the object volume.
                            This is more accurate than using the surface area (default), but requires a watertight mesh.
     :return: A dict containing for every active object the shift that was added to their origins.
     """
-    # Shift the origin of all objects to their center of mass to make the simulation more realistic
     origin_shift = {}
-    for obj in get_all_mesh_objects():
-        if obj.has_rigidbody_enabled():
-            prev_origin = obj.get_origin()
-            new_origin = obj.set_origin(mode="ORIGIN_CENTER_OF_VOLUME" if use_volume_com else "CENTER_OF_MASS")
-            origin_shift[obj.get_name()] = new_origin - prev_origin
+    if not use_model_origins:
+        # Shift the origin of all objects to their center of mass to make the simulation more realistic
+        # This is very slow, you should do this in pre-processing of the models
+        for obj in get_all_mesh_objects():
+            if obj.has_rigidbody_enabled():
+                prev_origin = obj.get_origin()
+                new_origin = obj.set_origin(mode="ORIGIN_CENTER_OF_VOLUME" if use_volume_com else "CENTER_OF_MASS")
+                origin_shift[obj.get_name()] = new_origin - prev_origin
 
-            # Persist mesh scaling as having a scale != 1 can make the simulation unstable
-            obj.persist_transformation_into_mesh(location=False, rotation=False, scale=True)
+                # Persist mesh scaling as having a scale != 1 can make the simulation unstable
+                obj.persist_transformation_into_mesh(location=False, rotation=False, scale=True)
 
     # Configure simulator
     bpy.context.scene.rigidbody_world.substeps_per_frame = substeps_per_frame
