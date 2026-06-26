@@ -21,9 +21,10 @@
 # We specifically asked for the permission to use this inside BlenderProc. All rights are still with Khaled Mamou.
 
 import os
+import signal
 from sys import platform
 from typing import Optional
-from subprocess import Popen
+from subprocess import Popen, TimeoutExpired
 import shutil
 import hashlib
 
@@ -34,20 +35,23 @@ from mathutils import Matrix
 import bmesh
 
 
-def convex_decomposition(obj: "MeshObject", temp_dir: str, vhacd_path: str, resolution: int = 1000000,
-                         name_template: str = "?_hull_#", remove_doubles: bool = True, apply_modifiers: bool = True,
-                         apply_transforms: str = "NONE", depth: int = 20, max_num_vertices_per_ch: int = 64,
+def convex_decomposition(obj: "MeshObject", file_name: str, temp_dir: str, vhacd_path: str,
+                         resolution: int = 1000000, num_hulls: int = 64,
+                         name_template: str = "?_hull_#", apply_modifiers: bool = True,
+                         apply_transforms: str = "NONE", depth: int = 20,
+                         max_num_vertices_per_ch: int = 64,
                          cache_dir: Optional[str] = None):
     """ Uses V-HACD to decompose the given object.
 
     You can turn of the usage of OpenCL by setting the environment variable NO_OPENCL to "1".
 
     :param obj: The blender object to decompose.
+    :param file_name: Filename of the mesh, to be used for hashing and cacheing.
     :param temp_dir: The temp directory where to store the convex parts.
     :param vhacd_path: The directory in which vhacd should be installed or is already installed.
     :param resolution: maximum number of voxels generated during the voxelization stage
+    :param num_hulls: Number of hulls to generate.
     :param name_template: The template how to name the convex parts.
-    :param remove_doubles: Remove double vertices before decomposition.
     :param apply_modifiers: Apply modifiers before decomposition.
     :param apply_transforms: Apply transforms before decomposition.
     :param depth: maximum number of clipping stages. During each split stage, all the model parts (with a concavity
@@ -113,6 +117,7 @@ def convex_decomposition(obj: "MeshObject", temp_dir: str, vhacd_path: str, reso
     mesh_hash = hasher.hexdigest()
 
     if cache_dir is None or not os.path.exists(os.path.join(cache_dir, str(mesh_hash) + ".obj")):
+        print(f"Generating convex decomposition for {file_name} ...")
         vhacd_binary = os.path.join(vhacd_path, "v-hacd", "app", "TestVHACD")
         if not os.path.exists(vhacd_binary):
             raise FileNotFoundError("The vhacd binary was not found, the build script probably failed!")
@@ -121,12 +126,19 @@ def convex_decomposition(obj: "MeshObject", temp_dir: str, vhacd_path: str, reso
         print(f"\nExporting mesh for V-HACD: {off_filename}...")
         obj_export(mesh, off_filename)
         bpy.data.meshes.remove(mesh)
-        cmd_line = f'"{vhacd_binary}" {off_filename} -r {resolution} -v {max_num_vertices_per_ch} -d {depth}'
+        cmd_line = f'"{vhacd_binary}" {off_filename} -r {resolution} -v {max_num_vertices_per_ch} -d {depth} -h {num_hulls}'
         if os.path.exists(os.path.basename(log_file_name)):
             cmd_line += f"2>&1 > {log_file_name}"
-        print(f"Running V-HACD...\n{cmd_line}\n")
-        with Popen(cmd_line, bufsize=-1, close_fds=True, shell=True, cwd=temp_dir) as vhacd_process:
-            vhacd_process.wait()
+
+        print(f"Running V-HACD...\nCMD: {cmd_line}\nARGS:\n")
+        with Popen(cmd_line, bufsize=-1, close_fds=True, shell=True, cwd=temp_dir, start_new_session=True) as vhacd_process:
+            try:
+                vhacd_process.wait(timeout=120)
+            except TimeoutExpired:
+                print("V-HACD timed out — killing process group")
+                os.killpg(os.getpgid(vhacd_process.pid), signal.SIGKILL)
+                vhacd_process.wait()  # reap the zombie so the context manager doesn't hang
+                raise
         out_file_name = os.path.join(temp_dir, "decomp.obj")
 
         # Import convex parts

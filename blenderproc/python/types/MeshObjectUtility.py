@@ -225,11 +225,13 @@ class MeshObject(Entity):
         else:
             rigid_body.mass = mass
 
-    def build_convex_decomposition_collision_shape(self, vhacd_path: str, temp_dir: Optional[str] = None,
+    def build_convex_decomposition_collision_shape(self, vhacd_path: str, file_name: str = "",
+                                                   temp_dir: Optional[str] = None,
                                                    cache_dir: str = "blenderproc_resources/decomposition_cache"):
         """ Builds a collision shape of the object by decomposing it into near convex parts using V-HACD
 
         :param vhacd_path: The directory in which vhacd should be installed or is already installed.
+        :param file_name: The name of the model file used for convex decomposition, used for hashing and cacheing.
         :param temp_dir: The temp dir to use for storing the object files created by v-hacd.
         :param cache_dir: If a directory is given, convex decompositions are stored there named after the meshes hash.
                           If the same mesh is decomposed a second time, the result is loaded from the cache and the
@@ -242,7 +244,8 @@ class MeshObject(Entity):
             temp_dir = Utility.get_temporary_directory()
 
         # Decompose the object
-        parts = convex_decomposition(self, temp_dir, resolve_path(vhacd_path), cache_dir=resolve_path(cache_dir))
+        parts = convex_decomposition(self, file_name, temp_dir, resolve_path(vhacd_path),
+                                     cache_dir=resolve_path(cache_dir))
         parts = [MeshObject(p) for p in parts]
 
         # Make the convex parts children of this object, enable their rigid body component and hide them
