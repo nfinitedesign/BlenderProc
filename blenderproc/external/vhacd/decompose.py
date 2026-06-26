@@ -25,6 +25,7 @@ from sys import platform
 from typing import Optional
 from subprocess import Popen
 import shutil
+import hashlib
 
 import git
 import numpy as np
@@ -104,21 +105,12 @@ def convex_decomposition(obj: "MeshObject", temp_dir: str, vhacd_path: str, reso
 
     mesh.transform(pre_matrix)
 
-    # Create bmesh
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
-    if remove_doubles:
-        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0001)
-    bmesh.ops.triangulate(bm, faces=bm.faces)
-    bm.to_mesh(mesh)
-    bm.free()
-
-    # Build a hash for the given mesh
-    mesh_hash = 0
-    for vert in mesh.vertices:
-        # Combine the hashes of the local coordinates of all vertices
-        mesh_hash = hash((mesh_hash, hash(vert.co[:])))
-    mesh_hash = abs(mesh_hash)
+    # build hash from filename + file size + modified date instead of verts
+    hasher = hashlib.sha256()
+    hasher.update(file_name.encode())
+    hasher.update(str(os.path.getsize(file_name)).encode())
+    hasher.update(str(os.path.getctime(file_name)).encode())
+    mesh_hash = hasher.hexdigest()
 
     if cache_dir is None or not os.path.exists(os.path.join(cache_dir, str(mesh_hash) + ".obj")):
         vhacd_binary = os.path.join(vhacd_path, "v-hacd", "app", "TestVHACD")
