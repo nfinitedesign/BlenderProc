@@ -17,7 +17,6 @@ from blenderproc.python.utility.Utility import Utility, resolve_path
 from blenderproc.python.utility.BlenderUtility import get_all_blender_mesh_objects
 from blenderproc.python.types.MaterialUtility import Material
 from blenderproc.python.material import MaterialLoaderUtility
-from blenderproc.python.utility.SetupUtility import SetupUtility
 
 if platform != "win32":
     # this is only supported under linux and macOS, the import itself already doesn't work under windows
@@ -227,12 +226,24 @@ class MeshObject(Entity):
 
     def build_convex_decomposition_collision_shape(self, vhacd_path: str, file_name: str = "",
                                                    temp_dir: Optional[str] = None,
+                                                   resolution: int = 1000000, num_hulls: int = 64,
+                                                   name_template: str = "?_hull_#", apply_modifiers: bool = True,
+                                                   apply_transforms: str = "NONE", depth: int = 20,
+                                                   max_num_vertices_per_ch: int = 64,
                                                    cache_dir: str = "blenderproc_resources/decomposition_cache"):
         """ Builds a collision shape of the object by decomposing it into near convex parts using V-HACD
 
         :param vhacd_path: The directory in which vhacd should be installed or is already installed.
         :param file_name: The name of the model file used for convex decomposition, used for hashing and cacheing.
         :param temp_dir: The temp dir to use for storing the object files created by v-hacd.
+        :param resolution: maximum number of voxels generated during the voxelization stage
+        :param num_hulls: Number of hulls to generate.
+        :param name_template: The template how to name the convex parts.
+        :param apply_modifiers: Apply modifiers before decomposition.
+        :param apply_transforms: Apply transforms before decomposition.
+        :param depth: maximum number of clipping stages. During each split stage, all the model parts (with a concavity
+                      higher than the user defined threshold) are clipped according the "best" clipping plane
+        :param max_num_vertices_per_ch: controls the maximum number of triangles per convex-hull
         :param cache_dir: If a directory is given, convex decompositions are stored there named after the meshes hash.
                           If the same mesh is decomposed a second time, the result is loaded from the cache and the
                           actual decomposition is skipped.
@@ -245,7 +256,9 @@ class MeshObject(Entity):
 
         # Decompose the object
         parts = convex_decomposition(self, file_name, temp_dir, resolve_path(vhacd_path),
-                                     cache_dir=resolve_path(cache_dir))
+                                     resolution, num_hulls, name_template, apply_modifiers, apply_transforms, depth,
+                                     max_num_vertices_per_ch, cache_dir=resolve_path(cache_dir))
+
         parts = [MeshObject(p) for p in parts]
 
         # Make the convex parts children of this object, enable their rigid body component and hide them
