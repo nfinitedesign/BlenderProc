@@ -423,7 +423,7 @@ class MeshObject(Entity):
                                                  world2local.to_3x3() @ Vector(down_direction))
         return hit
 
-    def ray_cast(self,origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
+    def ray_cast(self, origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
                  max_distance: float = 1.70141e+38) -> Tuple[bool, np.ndarray, np.ndarray, int]:
         """ Cast a ray onto evaluated geometry, in object space.
 
@@ -567,10 +567,11 @@ class MeshObject(Entity):
         # Known issue: https://projects.blender.org/blender/blender/issues/117399
 
         # The datafiles are expected to be in the same folder relative to blender's python binary.
-        path = Path(bpy.utils.resource_path('LOCAL')) / "datafiles" / "assets" / "geometry_nodes" / "smooth_by_angle.blend"
+        path = Path(
+            bpy.utils.resource_path('LOCAL')) / "datafiles" / "assets" / "geometry_nodes" / "smooth_by_angle.blend"
         if not path.exists():
             raise RuntimeError(f"Could not find the path to the 'ESSENTIALS' asset folder expected at {path}")
-        
+
         # Get the node group from the current file (reuse if it exists), otherwise load it from the
         # precalculated path and append to the current .blend.
         smooth_by_angle_node_group_name = "Smooth by Angle"
@@ -586,7 +587,7 @@ class MeshObject(Entity):
             if existing_mod.type == 'NODES' and existing_mod.node_group == existing_node_group:
                 modifier = modifier
                 break
-        
+
         # Create a new modifier if no existing modifier was found
         if modifier is None:
             modifier = self.blender_obj.modifiers.new(name=smooth_by_angle_node_group_name, type='NODES')
@@ -597,38 +598,39 @@ class MeshObject(Entity):
         return modifier
 
     def mesh_as_trimesh(self) -> Trimesh:
-         """ Returns a trimesh.Trimesh instance of the MeshObject.
+        """ Returns a trimesh.Trimesh instance of the MeshObject.
     
          :return: The object as trimesh.Trimesh.
          """
-    
-         # get mesh data
-         mesh = self.get_mesh()
-         
-         # check if faces are pure tris or quads and triangulate quads if this is not the case
-         if not all(len(f.vertices[:]) == len(mesh.polygons[0].vertices[:]) for f in mesh.polygons):
-             # Triangulate quads
-             self.select()
-             bpy.ops.object.mode_set(mode='EDIT')
-             bpy.ops.mesh.select_all(action='SELECT')
-             bpy.ops.mesh.quads_convert_to_tris(quad_method='FIXED', ngon_method='BEAUTY') 
-             bpy.ops.object.mode_set(mode='OBJECT')
-             self.deselect()
-         
-         # get vertices 
-         verts = np.array([[v.co[0], v.co[1], v.co[2]] for v in mesh.vertices])
-         # re-scale the vertices since scale operations doesn't apply to the mesh data
-         verts *= self.blender_obj.scale
-         # get faces   
-         faces = np.array([f.vertices[:] for f in mesh.polygons if len(f.vertices[:]) in [3, 4]])
-    
-         return Trimesh(vertices=verts, faces=faces)
+
+        # get mesh data
+        mesh = self.get_mesh()
+
+        # check if faces are pure tris or quads and triangulate quads if this is not the case
+        if not all(len(f.vertices[:]) == len(mesh.polygons[0].vertices[:]) for f in mesh.polygons):
+            # Triangulate quads
+            self.select()
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.quads_convert_to_tris(quad_method='FIXED', ngon_method='BEAUTY')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            self.deselect()
+
+        # get vertices
+        verts = np.array([[v.co[0], v.co[1], v.co[2]] for v in mesh.vertices])
+        # re-scale the vertices since scale operations doesn't apply to the mesh data
+        verts *= self.blender_obj.scale
+        # get faces
+        faces = np.array([f.vertices[:] for f in mesh.polygons if len(f.vertices[:]) in [3, 4]])
+
+        return Trimesh(vertices=verts, faces=faces)
 
     def clear_custom_splitnormals(self):
         """ Removes custom split normals which might exist after importing the object from file. """
 
         with bpy.context.temp_override(object=self.blender_obj):
             bpy.ops.mesh.customdata_custom_splitnormals_clear()
+
 
 def create_from_blender_mesh(blender_mesh: bpy.types.Mesh, object_name: str = None) -> MeshObject:
     """ Creates a new Mesh object using the given blender mesh.
@@ -653,6 +655,7 @@ def create_with_empty_mesh(object_name: str, mesh_name: str = None) -> MeshObjec
     if mesh_name is None:
         mesh_name = object_name
     return create_from_blender_mesh(bpy.data.meshes.new(mesh_name), object_name)
+
 
 def create_from_point_cloud(points: np.ndarray,
                             object_name: str,
@@ -811,7 +814,7 @@ def compute_poi(objects: List[MeshObject]) -> np.ndarray:
 
 def scene_ray_cast(origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
                    max_distance: float = 1.70141e+38) -> Tuple[
-bool, np.ndarray, np.ndarray, int, MeshObject, np.ndarray]:
+    bool, np.ndarray, np.ndarray, int, MeshObject, np.ndarray]:
     """ Cast a ray onto all geometry from the scene, in world space.
 
    :param origin: Origin of the ray, in world space.
