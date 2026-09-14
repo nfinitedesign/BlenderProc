@@ -179,13 +179,15 @@ def cli():
             p = subprocess.Popen([blender_run_path, "--python-use-system-env", "--python-exit-code", "0", "--python",
                                 os.path.join(repo_root_directory, "blenderproc/debug_startup.py"), "--",
                                 path_src_run, temp_dir] + unknown_args,
-                                env=used_environment)
+                                env=used_environment,
+                                start_new_session=True)  # own process group -> can be killed as a whole
             # pylint: enable=consider-using-with
         else:
             # pylint: disable=consider-using-with
             p = subprocess.Popen([blender_run_path, "--background", "--python-use-system-env", "--python-exit-code",
                                 "2", "--python", path_src_run, "--", args.file, temp_dir] + unknown_args,
-                                env=used_environment)
+                                env=used_environment,
+                                start_new_session=True)  # own process group -> can be killed as a whole
             # pylint: enable=consider-using-with
 
         def clean_temp_dir():
@@ -202,14 +204,45 @@ def cli():
 
         signal.signal(signal.SIGTERM, handle_sigterm)
 
+        # Wait for Blender to finish, but never let a lingering child process block
+        # the CLI process (and with it the parent process's stdout pipe).
+        # Blender is launched in its own session (setsid), so we can kill the whole
+        # process group if it hangs during shutdown.
+        _BLENDER_WAIT_TIMEOUT = 1200  # max seconds after Blender finished the main work
         try:
-            p.wait()
+            p.wait(timeout=_BLENDER_WAIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            import logging as _logging
+            _logging.warning(
+                f"Blender (pid {p.pid}) still running after {_BLENDER_WAIT_TIMEOUT}s - "
+                "terminating the process group"
+            )
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                p.terminate()
+            try:
+                p.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    p.kill()
+                p.wait(timeout=30)
         except KeyboardInterrupt:
             try:
                 p.terminate()
             except OSError:
                 pass
             p.wait()
+
+        # Make sure the stdout pipe is fully consumed/closed so a parent process
+        # reading our stdout doesn't block on it.
+        try:
+            if p.stdout:
+                p.stdout.close()
+        except (OSError, ValueError):
+            pass
 
         # Clean up
         clean_temp_dir()
