@@ -208,13 +208,14 @@ def cli():
         # the CLI process (and with it the parent process's stdout pipe).
         # Blender is launched in its own session (setsid), so we can kill the whole
         # process group if it hangs during shutdown.
-        _BLENDER_WAIT_TIMEOUT = 1200  # max seconds after Blender finished the main work
+        _BLENDER_WAIT_TIMEOUT = 3600
+        BLENDER_WAIT_TIMEOUT = os.environ.get("OUTPUT_ROOT", _BLENDER_WAIT_TIMEOUT)  # max seconds after Blender finished the main work
         try:
-            p.wait(timeout=_BLENDER_WAIT_TIMEOUT)
+            p.wait(timeout=BLENDER_WAIT_TIMEOUT)
         except subprocess.TimeoutExpired:
             import logging as _logging
             _logging.warning(
-                f"Blender (pid {p.pid}) still running after {_BLENDER_WAIT_TIMEOUT}s - "
+                f"Blender (pid {p.pid}) still running after {BLENDER_WAIT_TIMEOUT}s - "
                 "terminating the process group"
             )
             try:
