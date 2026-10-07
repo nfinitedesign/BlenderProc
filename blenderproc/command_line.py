@@ -197,53 +197,63 @@ def cli():
                 print("Cleaning temporary directory")
                 shutil.rmtree(temp_dir)
 
-        # Listen for SIGTERM signal, so we can properly clean up and terminate the child process
+        # Listen for SIGTERM signal so the CLI can cleanly terminate Blender too.
+        # Blender runs in its own session/process group, therefore p.terminate()
+        # alone is not sufficient to stop the whole Blender process tree.
+        def terminate_blender(sig: int = signal.SIGTERM) -> None:
+            try:
+                os.killpg(os.getpgid(p.pid), sig)
+            except (OSError, ProcessLookupError):
+                try:
+                    if sig == signal.SIGKILL:
+                        p.kill()
+                    else:
+                        p.terminate()
+                except OSError:
+                    pass
+
         def handle_sigterm(_signum, _frame):
+            terminate_blender(signal.SIGTERM)
             clean_temp_dir()
-            p.terminate()
 
         signal.signal(signal.SIGTERM, handle_sigterm)
 
-        # Wait for Blender to finish, but never let a lingering child process block
-        # the CLI process (and with it the parent process's stdout pipe).
-        # Blender is launched in its own session (setsid), so we can kill the whole
-        # process group if it hangs during shutdown.
-        _BLENDER_WAIT_TIMEOUT = 3600
-        BLENDER_WAIT_TIMEOUT = os.environ.get("OUTPUT_ROOT", _BLENDER_WAIT_TIMEOUT)  # max seconds after Blender finished the main work
+        # Last-resort safety net for orphaned CLI processes. The controller
+        # (pipeline) is the authoritative task watchdog and passes its task
+        # deadline + a small margin via this env var, so even if the controller
+        # itself dies (OOM killer, SIGKILL, crashed worker), the CLI still
+        # carries the deadline in its environment and will eventually reap a
+        # hung Blender instead of lingering forever and leaking GPU memory.
+        # Set BLENDER_WAIT_TIMEOUT=0 to disable the safety net entirely.
+        _BLENDER_WAIT_TIMEOUT_DEFAULT = 21600  # 6 h for manual/standalone runs
         try:
-            p.wait(timeout=BLENDER_WAIT_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            import logging as _logging
-            _logging.warning(
-                f"Blender (pid {p.pid}) still running after {BLENDER_WAIT_TIMEOUT}s - "
-                "terminating the process group"
-            )
-            try:
-                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-            except (OSError, ProcessLookupError):
-                p.terminate()
+            blender_wait_timeout = int(os.environ.get("BLENDER_WAIT_TIMEOUT",
+                                                      _BLENDER_WAIT_TIMEOUT_DEFAULT))
+        except ValueError:
+            blender_wait_timeout = _BLENDER_WAIT_TIMEOUT_DEFAULT
+
+        def terminate_blender_after_timeout():
+            terminate_blender(signal.SIGTERM)
             try:
                 p.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except (OSError, ProcessLookupError):
-                    p.kill()
-                p.wait(timeout=30)
-        except KeyboardInterrupt:
-            try:
-                p.terminate()
-            except OSError:
-                pass
-            p.wait()
+                terminate_blender(signal.SIGKILL)
+                p.wait()
 
-        # Make sure the stdout pipe is fully consumed/closed so a parent process
-        # reading our stdout doesn't block on it.
         try:
-            if p.stdout:
-                p.stdout.close()
-        except (OSError, ValueError):
-            pass
+            if blender_wait_timeout > 0:
+                p.wait(timeout=blender_wait_timeout)
+            else:
+                p.wait()
+        except KeyboardInterrupt:
+            terminate_blender_after_timeout()
+        except subprocess.TimeoutExpired:
+            import logging as _logging
+            _logging.warning(
+                f"Blender (pid {p.pid}) still running after {blender_wait_timeout}s - "
+                "terminating the process group (last-resort safety net)"
+            )
+            terminate_blender_after_timeout()
 
         # Clean up
         clean_temp_dir()
