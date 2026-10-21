@@ -903,7 +903,15 @@ def set_render_devices(use_only_cpu: bool = False, desired_gpu_device_type: Unio
         found = False
         for device_type in desired_gpu_device_type:
             # Check if there are devices that support that type
-            devices = preferences.get_devices_for_type(device_type)
+            all_devices = preferences.get_devices_for_type(device_type)
+            # Exclude the CPU entry: Cycles also lists the CPU for every device type and its "use" flag
+            # defaults to True. If it stays enabled, it participates as a render device and becomes the
+            # straggler of every multi-device render, negating the benefit of multiple GPUs.
+            devices = [device for device in all_devices if device.type != "CPU"]
+            for device in all_devices:
+                if device.type == "CPU":
+                    device.use = False
+                    print(f"Device {device.name} of type {device.type} excluded from GPU rendering.")
             if devices:
                 # Set device type
                 bpy.context.preferences.addons['cycles'].preferences.compute_device_type = device_type
