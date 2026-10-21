@@ -645,9 +645,44 @@ def _render_progress_bar(pipe_out: int, pipe_in: int, stdout: IO, total_frames: 
         yield
 
 
+def _mute_output_writing_nodes(output_keys: Set[str]) -> List[bpy.types.Node]:
+    """ Mutes all compositor output file nodes which write the given registered outputs.
+
+    Outputs like depth or segmaps are written via compositor file output nodes during every render. Muting
+    those nodes skips both their CPU-side generation cost and the disk I/O for renders which only need the
+    color images. Use the returned node list to unmute them afterwards.
+
+    :param output_keys: Keys of registered outputs (e.g. "depth", "segmap") which should not be written.
+    :return: The list of nodes which were muted.
+    """
+    muted_nodes = []
+    node_tree = bpy.context.scene.node_tree
+    if node_tree is None:
+        return muted_nodes
+    for key in output_keys:
+        output = Utility.find_registered_output_by_key(key)
+        if output is None:
+            print(f"Warning: Output key '{key}' was requested to be skipped, but it is not registered. "
+                  f"Continuing without skipping it.")
+            continue
+        # Registered paths look like "<dir>/<prefix>%04d<suffix>", the matching compositor node writes to
+        # <base_path>/<slot_path><frame><suffix> for a single file slot
+        if "%04d" not in output["path"]:
+            continue
+        static_path = output["path"].split("%04d")[0]
+        for node in node_tree.nodes:
+            if node.type != "OUTPUT_FILE" or len(node.file_slots) != 1:
+                continue
+            if os.path.join(node.base_path, node.file_slots[0].path) == static_path:
+                node.mute = True
+                muted_nodes.append(node)
+    return muted_nodes
+
+
 def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_key: Optional[str] = "colors",
            load_keys: Optional[Set[str]] = None, return_data: bool = True,
            keys_with_alpha_channel: Optional[Set[str]] = None,
+           skip_output_generation: Optional[Set[str]] = None,
            verbose: bool = False) -> Dict[str, Union[np.ndarray, List[np.ndarray]]]:
     """ Render all frames.
 
@@ -660,6 +695,10 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
     :param load_keys: Set of output keys to load when available
     :param return_data: Whether to load and return generated data.
     :param keys_with_alpha_channel: A set containing all keys whose alpha channels should be loaded.
+    :param skip_output_generation: A set of registered output keys (e.g. "depth", "segmap") whose compositor \
+                                   file output nodes are muted during this render, so their files are neither \
+                                   written nor loaded. Only affects compositor-based outputs, the color images \
+                                   are always rendered. Use this for renders which only need the color images.
     :param verbose: If True, more details about the rendering process are printed.
     :return: dict of lists of raw renderer output. Keys can be 'distance', 'colors', 'normals'
     """
@@ -677,6 +716,13 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
             "version": "2.0.0"
         })
         load_keys.add(output_key)
+
+    muted_nodes: List[bpy.types.Node] = []
+    if skip_output_generation:
+        skip_output_generation = set(skip_output_generation)
+        # Never try to load outputs whose generation was skipped
+        load_keys = set(load_keys) - skip_output_generation
+        muted_nodes = _mute_output_writing_nodes(skip_output_generation)
 
     bpy.context.scene.render.filepath = os.path.join(output_dir, file_prefix)
 
@@ -699,19 +745,23 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
         # Define pipe to communicate blenders debug messages to progress bar
         pipe_out, pipe_in = os.pipe()
         begin = time.time()
-        with stdout_redirected(pipe_in, enabled=not verbose) as stdout:
-            with _render_progress_bar(pipe_out, pipe_in, stdout, total_frames, enabled=not verbose):
-                bpy.ops.render.render(animation=True, write_still=True)
-
-        # Close Pipes to prevent having unclosed file handles
         try:
-            os.close(pipe_out)
-        except OSError:
-            pass
-        try:
-            os.close(pipe_in)
-        except OSError:
-            pass
+            with stdout_redirected(pipe_in, enabled=not verbose) as stdout:
+                with _render_progress_bar(pipe_out, pipe_in, stdout, total_frames, enabled=not verbose):
+                    bpy.ops.render.render(animation=True, write_still=True)
+        finally:
+            # Close Pipes to prevent having unclosed file handles
+            try:
+                os.close(pipe_out)
+            except OSError:
+                pass
+            try:
+                os.close(pipe_in)
+            except OSError:
+                pass
+            # Re-enable writing of the skipped outputs, also in case of an exception
+            for node in muted_nodes:
+                node.mute = False
 
         print(f"Finished rendering after {time.time() - begin:.3f} seconds")
         # Revert changes
