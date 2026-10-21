@@ -33,36 +33,30 @@ def set_denoiser(denoiser: Optional[str]):
     """
     # Make sure there is no denoiser active
     disable_all_denoiser()
+
+    # GPU denoising only works when a GPU render device is configured; resolving against the
+    # current device setting here keeps this correct independent of the set_render_devices order.
+    use_gpu = bpy.context.scene.cycles.device == "GPU"
+
     if denoiser is None:
         pass
     elif denoiser.upper() == "OPTIX":
         bpy.context.scene.cycles.use_denoising = True
         bpy.context.view_layer.cycles.use_denoising = True
         bpy.context.scene.cycles.denoiser = "OPTIX"
+        # Let the OptiX denoiser run on the GPU (also beneficial when rendering on the CPU)
+        bpy.context.scene.cycles.denoising_use_gpu = use_gpu
     elif denoiser.upper() == "INTEL":
-        # The intel denoiser is activated via the compositor
-        bpy.context.scene.use_nodes = True
-        nodes = bpy.context.scene.node_tree.nodes
-        links = bpy.context.scene.node_tree.links
-
-        # The denoiser gets normal and diffuse color as input
-        bpy.context.view_layer.use_pass_normal = True
-        bpy.context.view_layer.use_pass_diffuse_color = True
-
-        # Add denoiser node
-        denoise_node = nodes.new("CompositorNodeDenoise")
-
-        # Link nodes
-        render_layer_node = Utility.get_the_one_node_with_type(nodes, 'CompositorNodeRLayers')
-        composite_node = Utility.get_the_one_node_with_type(nodes, 'CompositorNodeComposite')
-        Utility.insert_node_instead_existing_link(links,
-                                                  render_layer_node.outputs['Image'],
-                                                  denoise_node.inputs['Image'],
-                                                  denoise_node.outputs['Image'],
-                                                  composite_node.inputs['Image'])
-
-        links.new(render_layer_node.outputs['DiffCol'], denoise_node.inputs['Albedo'])
-        links.new(render_layer_node.outputs['Normal'], denoise_node.inputs['Normal'])
+        # Use Cycles' native OpenImageDenoise with albedo/normal guiding passes instead of a
+        # compositor denoise node: the final-render compositor executes on the CPU only, while
+        # the native OIDN denoiser runs on the GPU when denoising_use_gpu is set. This yields
+        # the same guided denoising result at a fraction of the cost.
+        bpy.context.scene.cycles.use_denoising = True
+        bpy.context.view_layer.cycles.use_denoising = True
+        bpy.context.scene.cycles.denoiser = "OPENIMAGEDENOISE"
+        bpy.context.scene.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"
+        bpy.context.scene.cycles.denoising_prefilter = "ACCURATE"
+        bpy.context.scene.cycles.denoising_use_gpu = use_gpu
     else:
         raise Exception("No such denoiser: " + denoiser)
 
