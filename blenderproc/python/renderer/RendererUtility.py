@@ -726,7 +726,8 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
 def set_output_format(file_format: Optional[str] = None, color_depth: Optional[int] = None,
                       enable_transparency: Optional[bool] = None, jpg_quality: Optional[int] = None,
                       view_transform: Optional[str] = None, look: Optional[str] = None,
-                      exposure: Optional[float] = None, gamma: Optional[float] = None):
+                      exposure: Optional[float] = None, gamma: Optional[float] = None,
+                      compression: Optional[int] = None):
     """ Sets the output format to use for rendering. Default values defined in DefaultConfig.py.
 
     :param file_format: The file format to use, e.q. "PNG", "JPEG" or "OPEN_EXR".
@@ -738,6 +739,8 @@ def set_output_format(file_format: Optional[str] = None, color_depth: Optional[i
     :param look: Additional transform applied before view transform for artistic needs.
     :param exposure: Exposure (stops) applied before display transform.
     :param gamma: Amount of gamma modification applied after display transform.
+    :param compression: The PNG compression level to use, 0 = no compression, 15 = highest compression. \
+                        This does not affect the pixel values, only the encoding time and the file size.
     """
     if enable_transparency is not None:
         # In case a previous renderer changed these settings
@@ -752,6 +755,8 @@ def set_output_format(file_format: Optional[str] = None, color_depth: Optional[i
     if jpg_quality is not None:
         # only influences jpg quality
         bpy.context.scene.render.image_settings.quality = jpg_quality
+    if compression is not None:
+        bpy.context.scene.render.image_settings.compression = compression
     if view_transform is not None:
         bpy.context.scene.view_settings.view_transform = view_transform
     if look is not None:
