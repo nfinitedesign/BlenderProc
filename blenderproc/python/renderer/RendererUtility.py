@@ -985,3 +985,15 @@ def set_render_devices(use_only_cpu: bool = False, desired_gpu_device_type: Unio
             bpy.context.scene.cycles.device = "CPU"
             bpy.context.preferences.addons['cycles'].preferences.compute_device_type = "NONE"
             print("Using only the CPU for rendering")
+
+    # Align the compositor with the render device decision. The final-render compositor executes
+    # the whole post-processing node chain (exposure, dispersion, color balance, noise, vignette,
+    # grayscale), which otherwise always runs on the CPU. 'FULL' precision avoids the reduced
+    # precision the 'AUTO' setting can introduce.
+    compositor_on_gpu = bpy.context.scene.cycles.device == "GPU"
+    bpy.context.scene.render.compositor_device = "GPU" if compositor_on_gpu else "CPU"
+    bpy.context.scene.render.compositor_precision = "FULL"
+    # Device used by compositor DENOISE nodes. The pipeline denoises natively via the Cycles
+    # OIDN denoiser (see set_denoiser), so no compositor DENOISE node is present; this is kept
+    # consistent anyway for scenes that do contain one.
+    bpy.context.scene.render.compositor_denoise_device = "GPU" if compositor_on_gpu else "CPU"
