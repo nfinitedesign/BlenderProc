@@ -285,9 +285,20 @@ def apply_lens_distortion(image: Union[List[np.ndarray], np.ndarray],
         map_y = mapping_coords[0]
     map_x = np.ascontiguousarray(map_x, dtype=np.float32)
     map_y = np.ascontiguousarray(map_y, dtype=np.float32)
-    # order=0 -> nearest neighbor (segmaps); interpolated orders -> cubic, which is at least as
-    # accurate as the previous quadratic spline interpolation and still ~30x faster.
-    cv_interpolation = cv2.INTER_NEAREST if interpolation_order == 0 else cv2.INTER_CUBIC
+    # order=0 -> nearest neighbor (segmaps); interpolated orders -> Lanczos4, which is the
+    # cv2 kernel closest to the ideal sinc reconstruction (and to the previous quadratic
+    # spline interpolation) while still being SIMD-vectorized and multithreaded.
+    # NOTE: INTER_CUBIC (Catmull-Rom, negative lobes) was measured to introduce a systematic
+    # fringe-phase bias in FlexView pattern images, degrading the NxLib-vs-GT depth
+    # comparison from 99.45% to 98.38% good pixels (concentric ring artifacts).
+    cv_interpolation = cv2.INTER_NEAREST if interpolation_order == 0 else cv2.INTER_LANCZOS4
+    if interpolation_order == 0:
+        # cv2's INTER_NEAREST truncates the sampling coordinate while scipy's order=0
+        # 'nearest' rounds to the closest pixel center. Pre-rounding the maps (round
+        # half up, like scipy) restores the exact previous nearest-neighbor behavior
+        # and removes the half-pixel floor bias; remap then hits exact pixel centers.
+        map_x = np.ascontiguousarray(np.floor(map_x + 0.5), dtype=np.float32)
+        map_y = np.ascontiguousarray(np.floor(map_y + 0.5), dtype=np.float32)
 
     def _internal_apply(input_image: np.ndarray) -> np.ndarray:
         """
